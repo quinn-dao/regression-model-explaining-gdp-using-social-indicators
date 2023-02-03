@@ -1,0 +1,638 @@
+---
+title: "A Model to Predict Average living standards using social indicators"
+author: "Uyen (Quinn) Dao"
+date: " Last Updated December 18th, 2020"
+output:
+  html_document:
+    fig_caption: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 2
+    df_print: kable
+    toc_float:
+      collapsed: no
+---
+
+```{r, include=FALSE}
+# Do not edit this code block/chunk
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning = FALSE, fig.width = 16/2.5, fig.height = 9/2.5)
+```
+
+
+```{r Packages}
+# Load all necessary packages here:
+library(tidyverse) 
+library(janitor)
+library(moderndive)
+library(here)
+library(knitr)
+library(readxl)
+library(tibbletime)    #to sort a variable of type 'date'
+library(MASS)    #for box-cox
+library(car)    #for vif and qqplot() and 3d graphs
+library(plotly)   # for interactive graphs
+library(olsrr)   # cook's distance
+library(GGally)    # ggpairs()
+library(corrplot)   #fancy correlation matrix
+library(splines)
+library(kableExtra)   # for interactive graphs
+
+```
+
+```{r Wrangling}
+# data wrangling code:
+#reading in the code
+GDP_per_capita <- read_csv(here("GDP_Per_Capita.csv"))
+middle_school_enrollment <- read_csv(here("Middle_School_Enrollment_Percentage.csv"))
+hightech_export <- read_csv(here("High-Tech_Export.csv"))
+urban_population_percentage <- read_csv(here("Urban_Population_Percentage.csv"))
+unemployment_percentage <- read_csv(here("Unemployment_Percentage.csv"))
+# View(GDP_per_capita)
+# View(middle_school_enrollment)
+# View(hightech_export)
+# View(urban_population_percentage)
+# View(unemployment_percentage)
+
+
+GDP_per_capita_tidy <- GDP_per_capita %>%
+    dplyr::select(c("Country Name", "2019 [YR2019]")) %>%
+    rename("GDP2019"="2019 [YR2019]", "Country" = "Country Name") %>%
+    mutate(GDP2019 = as.numeric(GDP2019),
+           Country = as.factor(Country)) %>%
+    na.omit()
+#colnames(GDP_per_capita_tidy) <- c("Country" , "GDP (USD)")
+
+
+
+middle_school_enrollment_tidy <- middle_school_enrollment %>%
+    dplyr::select("Country Name", "2000 [YR2000]") %>%
+    rename("MidSchool2000"="2000 [YR2000]", "Country" = "Country Name") %>%
+    mutate(MidSchool2000 = as.numeric(MidSchool2000),
+           Country = as.factor(Country)) %>%
+    na.omit()
+#colnames(middle_school_enrollment_tidy) <- c("Country" , "Midschool Enrollment (%)")
+
+
+
+unemployment_tidy <- unemployment_percentage %>%
+    dplyr::select(c("Country Name", "2019 [YR2019]")) %>%
+    rename("Unemployment2019"="2019 [YR2019]", "Country" = "Country Name") %>%
+    mutate(Unemployment2019 = as.numeric(Unemployment2019),
+           Country = as.factor(Country)) %>%
+    na.omit()
+#colnames(unemployment_tidy) <- c("Country" , "Unemployment Rates")
+
+
+
+hightech_tidy <- hightech_export %>%
+    dplyr::select(c("Country Name", "2019 [YR2019]")) %>%
+    rename("HighTech2019"="2019 [YR2019]", "Country" = "Country Name") %>%
+    mutate(HighTech2019 = as.numeric(HighTech2019),
+           Country = as.factor(Country)) %>%
+    na.omit()
+#colnames(hightech_tidy) <- c("Country" , "HighTech Export(USD)")
+
+
+
+urban_population_tidy <- urban_population_percentage %>%
+    dplyr::select(c("Country Name", "2019 [YR2019]")) %>%
+    rename("UrbanPopPercentage2019"="2019 [YR2019]", "Country" = "Country Name") %>%
+    mutate(UrbanPopPercentage2019 = as.numeric(UrbanPopPercentage2019),
+           Country = as.factor(Country)) %>%
+    na.omit()
+#colnames(urban_population_tidy) <- c("Country" , "Urban Population (%)")
+
+
+
+# View(GDP_per_capita_tidy)
+# View(middle_school_enrollment_tidy)
+# View(unemployment_tidy)
+# View(hightech_tidy)
+# View(urban_population_tidy)
+
+
+
+## final joint data set
+# did the join by country
+# created our dependent variable (there is no population of zero when dividing, and neither variable used has missing values)
+# removed missing values (only the indices had missing values)
+ tidy_joined_dataset <-  GDP_per_capita_tidy %>%
+    inner_join(middle_school_enrollment_tidy, by = c("Country")) %>%
+    inner_join(unemployment_tidy, by = c("Country")) %>%
+    inner_join(hightech_tidy, by = c("Country")) %>%
+    inner_join(urban_population_tidy, by = c("Country")) %>%
+    na.omit()  
+
+ View(tidy_joined_dataset)
+```
+
+
+***
+
+
+# I. Introduction 
+
+
+Gross domestic product (GDP) is one of the most common indicators used to track the health of a nation's economy, and GDP per capita is calculated by taking the GDP of a country divided by its total population and is generally accepted as a measure of the standard of living. This study aims to examine the relationship between an average person’s living standards in a country and some other social indicators in order to build a model with reliable predictability.
+
+The data used in this study is obtained from the world bank website that includes the GDP per capita, the unemployment rates, the urban population percentage, and the high-tech export of the countries in 2019, and the middle school enrollment rates in 2000. Data for the fiscal year of 2020 were available; however, the author chose to not based the study on that for the reason that the year has been an outlying occasion economically and socially for the world, and thus should not be considered for a study that aims to understand such relationship under the norm. 
+
+Four predictor variables were chosen to be used in this study. The yearly unemployment rates of a country were considered since a country is likely to be more successful fiscally with a larger working force. The urban population percentage was also considered as economic growth usually comes with urbanization, and they are positively correlated. The high-tech exports was chosen because it indicates if a country is industrialized and thus experience tremendous growth economically. Data for these indicators will be of the same year as the variable of interest, GDP per capita. However, only data for the predictor variable middle school enrollment rates is taken from the year 2000, because a time lag of 19 years indicates that the people who were going to middle school back then are now a major part of the workforce - the very class that generates most of the nation’s wealth.
+
+After organizing the data and removing countries with missing values, and non-country/territory observations, 71 countries remain represented in the dataset, out of the 195 countries in the world (approximately 36.4%). We recognize that this is a considerable amount of data loss and could introduce potential biases and reduce the generalizability of our findings.
+
+
+```{r sample_table}
+
+Cases_filtered = tidy_joined_dataset %>%
+  dplyr::select(c(Country, GDP2019, MidSchool2000, Unemployment2019, HighTech2019,UrbanPopPercentage2019))
+
+
+sample <- Cases_filtered %>%
+  ungroup() %>%
+  sample_n(5)
+
+sample %>%
+    dplyr::select(c(Country, GDP2019, MidSchool2000, Unemployment2019, HighTech2019,UrbanPopPercentage2019)) %>%
+  kable(caption = "Table 1.Sample for 5 randomly chosen countries of the data set used in this study") %>%
+  kable_styling(full_width = TRUE)
+
+
+```
+
+
+***
+
+
+# II. Exploratory data analysis
+
+
+***
+```{r summary_table}
+
+tidy_joined_dataset %>% 
+  ungroup() %>%
+  summarize(n = n(), 
+            min = min(GDP2019 , na.rm = TRUE), 
+            median = median(GDP2019 , na.rm = TRUE), 
+            mean = mean(GDP2019 , na.rm = TRUE), 
+            max = max(GDP2019 , na.rm = TRUE),
+            sd = sd(GDP2019 , na.rm = TRUE)) %>%
+  kable(caption = "Table 2: Summary for the GDP per capita") %>%
+  kable_styling(full_width = TRUE)
+```
+
+Our total sample size is 71 (Table 2). The mean GDP per capita is about 22,962.63, far greater than our median 11,611.42, indicating that our GDP per capita distribution is heavily right-skewed and might be affected by outlying observation, which can easily be observed in Figure 1. This is understandable because the global wealth is not distributed evenly: some countries own significantly more wealth than others.
+
+
+```{r   D_CCPTTH, fig.cap = "Figure 1. Distribution of the GDP per capita for individual countries in 2019", fig.align = "center"}
+
+ggplot(tidy_joined_dataset,  aes(x= GDP2019)) +
+  geom_histogram(bins = 20, fill = "#663399", color = "#0066ee") +
+  labs(x = "GDP per capita in 2019") +
+    theme_bw()
+
+
+```
+
+Figure 2 shows the distribution of unemployment rates in 2019, which is also right-skewed and have some extreme outliers lying around 20-30%. 
+We can observe that middle school enrollment rate of countries in 2000 has a left-skewed distribution, however, the tail is heavy so those cannot be considered outliers in figure 3. 
+
+
+```{r   D_SI, fig.cap = "Figure 2. Distribution of the unemployment rate for individual countries in 2019", fig.align = "center"}
+
+#bimodal, is this normally distributed
+ggplot(tidy_joined_dataset, aes(x= Unemployment2019)) +
+  geom_histogram(bins = 20, fill = "#663399", color = "#0066ee") +
+    labs(x = "Unemployment Rates in 2019") +
+    theme_bw()
+
+
+```
+
+```{r , fig.cap = "Figure 3. Distribution of the middle school enrollment rate for individual countries in 2000", fig.align = "center"}
+
+ggplot(tidy_joined_dataset, aes(x= MidSchool2000)) +
+  geom_histogram(bins = 20, fill = "#663399", color = "#0066ee") +
+  labs(x = "Middle school enrollment rate in 2000") +
+    theme_bw()
+
+
+
+```
+```{r , fig.cap = "Figure 4. Distribution of the high-tech exports for individual countries in 2019", fig.align = "center"}
+
+ggplot(tidy_joined_dataset, aes(x= HighTech2019)) +
+  geom_histogram(bins = 20, fill = "#663399", color = "#0066ee") +
+  labs(x = "High-tech export in 2019") +
+    theme_bw()
+
+```
+In figure 4 and 5, while the distribution of high-tech export is extremely right-skewed with many outlying observations, the urban population percentage is only slightly left-skewed with no obvious outliers.
+
+
+```{r , fig.cap = "Figure 5. Distribution of the urban population percentage for individual countries in 2019", fig.align = "center"}
+
+ggplot(tidy_joined_dataset, aes(x= UrbanPopPercentage2019)) +
+  geom_histogram(bins = 20, fill = "#663399", color = "#0066ee") +
+  labs(x = "Urban population percentage in 2019") +
+    theme_bw()
+
+```
+
+
+
+
+
+```{r , fig.cap = "Figure 6. Interactive Scatterplot for the GDP per capita in 2019 for individual countries against their urban population percentage in the same year. The red line is the best fit line. The blue curve is the Loess curve.", fig.align = "center"}
+
+
+sorted <- tidy_joined_dataset%>%
+  arrange(UrbanPopPercentage2019) 
+
+
+p1 <- ggplot(tidy_joined_dataset, aes(x= UrbanPopPercentage2019, y= GDP2019,
+                                      color = HighTech2019, label = Country )) +
+  geom_point(alpha = 0.7, size = 3) +
+  scale_color_gradient(low="#ffff00", high="#663399") +
+  geom_smooth(method = "lm", se = FALSE, size = 0.4, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.4, colour="#3080cf", fill = "#3080cf", alpha = 0.1) +
+  labs(y = "GDP per capita", x = "Urban Population Percentage") +
+  theme(panel.grid.major =  element_line(colour = "#DCDCDC"),
+        panel.grid.minor = element_line(colour = "#DCDCDC"),
+        axis.line = element_line(colour = "black"),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", 
+                                    fill=NA, 
+                                    size=0.5))
+
+ggplotly(p1)
+
+
+```
+In figure 6, the scatterplot shows that there seems to be some correlation between the GDP per capita and the Urban Population Percentage, which suggests that, without implying any causal effect, countries with a higher average standard of living for their people tend to have a higher proportion of its people living in urban areas. 
+
+The scatter plot in Figure 7 suggests that the unemployment rate and GDP per capita are negatively correlated. More notably, we notice that purple points cluster at the top whereas yellow points are more at the bottom. This implies that countries that had high middle-school enrollment rates in 2000 also have a higher standard of living 19 years later. This is better illustrated in Figure 8, we also notice that an upward curvature would better fit this relationship than a straight line.
+
+
+```{r , fig.cap = "Figure 7. Interactive Scatterplot for the GDP per capita in 2019 for individual countries against their unemployment rates of the same year. The red line is the best fit line. The blue curve is the Loess curve.", fig.align = "center"}
+
+
+sorted <- tidy_joined_dataset%>%
+  arrange(Unemployment2019) 
+
+p1 <- ggplot(tidy_joined_dataset, aes(x= Unemployment2019, y= GDP2019,
+                                      color = MidSchool2000, label = Country )) +
+  geom_point(alpha = 0.7, size = 3) +
+  scale_color_gradient(low="#ffff00", high="#663399") +
+  geom_smooth(method = "lm", se = FALSE, size = 0.4, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.4, colour="#3080cf", fill = "#3080cf", alpha = 0.1) +
+  labs(y = "GDP per capita", x = "Unemployment Rates") +
+  theme(panel.grid.major =  element_line(colour = "#DCDCDC"),
+        panel.grid.minor = element_line(colour = "#DCDCDC"),
+        axis.line = element_line(colour = "black"),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", 
+                                    fill=NA, 
+                                    size=0.5))
+
+ggplotly(p1)
+
+
+```
+```{r , fig.cap = "Figure 8. Interactive Scatterplot for the GDP per capita for individual countries against their middle school enrollment rates in the year 2000. The red line is the best fit line. The blue curve is the Loess curve.", fig.align = "center"}
+
+
+sorted <- tidy_joined_dataset%>%
+  arrange(MidSchool2000) 
+
+
+
+p1 <- ggplot(tidy_joined_dataset, aes(x= MidSchool2000, y= GDP2019,
+                                      color = UrbanPopPercentage2019, label = Country )) +
+  geom_point(alpha = 0.7, size = 3) +
+  scale_color_gradient(low="#ffff00", high="#663399") +
+  geom_smooth(method = "lm", se = FALSE, size = 0.4, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.4, colour="#3080cf", fill = "#3080cf", alpha = 0.1) +
+  labs(y = "GDP per capita", x = "Middle School Enrollment Rates") +
+  theme(panel.grid.major =  element_line(colour = "#DCDCDC"),
+        panel.grid.minor = element_line(colour = "#DCDCDC"),
+        axis.line = element_line(colour = "black"),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", 
+                                    fill=NA, 
+                                    size=0.5))
+
+ggplotly(p1)
+
+
+```
+
+```{r SP_ESI , fig.cap = "Figure 9. Interactive Scatterplot for the GDP per capita 2019 for individual countries against their High-tech Exports. The red line is the best fit line. The blue curve is the Loess curve.", fig.align = "center"}
+
+p2 <- ggplot(tidy_joined_dataset, aes(x= HighTech2019, y= GDP2019,
+                                      color = MidSchool2000, label = Country)) +
+  geom_point(alpha = 0.7, size = 3) +
+  geom_jitter(alpha = 0.7, width = 1.5, height = 0) +
+  scale_color_gradient(low="#ffff00", high="#663399") +
+  geom_smooth(method = "lm", se = FALSE, size = 0.5, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.5, colour="#3080cf", fill = "#3080cf", alpha = 0.1) +
+  labs(y = "GDP per capita", x = "High-tech Export in USD") +
+  theme(panel.grid.major =  element_line(colour = "#DCDCDC"),
+        panel.grid.minor = element_line(colour = "#DCDCDC"),
+        axis.line = element_line(colour = "black"),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", 
+                                    fill=NA, 
+                                    size=0.5))
+
+ggplotly(p2)
+
+```
+***
+
+
+# III. Multiple linear regression
+
+## i. Methods
+
+
+***
+
+```{r updated_y}
+
+tidy_joined_dataset["GDP2019_transf"] <- (tidy_joined_dataset$GDP2019)^0.5
+
+```
+
+Since the exploratory part shows that the distribution of our GDP per capita is right-skewed and has some outliers, we have decided that it is in our best interest to transform the data to tackle this problem. We also recognize the danger of overfitting, so we will not be using box-cox to optimize the transformation (for this set of data), but rather go with a more “natural” type of transformation: taking the square root.
+
+
+```{r   D_CCPTTH_t, fig.cap = "Figure 10. Distribution of GDP per capita in 2019 raised to 0.5, for individual countries ", fig.align = "center"}
+
+ggplot(tidy_joined_dataset,  aes(x= GDP2019_transf)) +
+  geom_histogram(bins = 20, fill = "#663399", color = "#0066ee") +
+  labs(x = "(GDP per capita in 2019)^0.5") +
+    theme_bw()
+
+
+```
+Using the  following model:
+
+```{r  primary_model}
+
+
+first_model = lm(GDP2019_transf ~ HighTech2019 + ns(UrbanPopPercentage2019, df = 3) + ns(MidSchool2000, df=3) + 
+                   ns(Unemployment2019, df = 3), data = tidy_joined_dataset)
+
+summary(first_model)$call
+
+```
+We have decided to keep the high-tech exports variable linear due to the fact that this chosen variable is extremely right skewed and does not have the spread needed for flexible alternatives (such as natural splines or polynomials). Except for that, we used natural splines for every other variables, which are unemployment rates, middle-school enrollment rates and urban population percentage. The number of knots used is 4, according to the sample size (<100).
+
+After the square root transformation, we observe that, though not perfect, the plots have shown more promising results: In figures 11, 12, and 13, the normal Q-Q plot shows an almost straight line, the distribution of error terms is more symmetric, however, the residual scatter plot does seem to be violating the homoscedasticity assumption.
+
+
+```{r qqplots ,fig.cap= "Figure 11. Normal Q-Qplot for the square root of GDP per capita in 2019", fig.align = "center"}
+
+qqnorm(tidy_joined_dataset$GDP2019_transf, pch = 1, frame = TRUE)
+qqline(tidy_joined_dataset$GDP2019_transf, col = "#3080cf", lwd = 2)
+
+```
+
+```{r rez_dis, fig.show="hold", out.width="50%"}
+
+regression_points <-  data.frame(resid(first_model))
+colnames(regression_points) <- "residuals"
+ggplot(regression_points, aes(x = residuals)) +
+  geom_histogram(bins = 20, colour="#ff6600", fill = "#3080cf", alpha = 0.4) +
+  labs(x = "Residuals", caption =  "Figure 12. Residuals distribution for the statistical model") +
+  theme_bw() +
+  theme(plot.caption = element_text(size = 13))
+
+
+
+tidy_joined_dataset["residuals"] <- resid(first_model)
+tidy_joined_dataset["fitted"] <- predict(first_model)
+
+
+ggplot(tidy_joined_dataset, aes(x = predict(first_model), y = resid(first_model))) +
+  geom_point(shape = 1) +
+  geom_hline(yintercept = 0,  size = 0.5, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.7, colour="#3080cf", alpha = 0.3) +
+  labs(y = "Residuals", x = "Fitted Values", caption = "Figure 13. Residuals graph for the fitted values. \n The Loess smoothing curve is in blue. \n A horizontal line is at zero in red.") +
+  theme_bw() +   
+  theme(plot.caption = element_text(size = 13))
+
+
+```
+
+```{r rez_RIFF, fig.cap = "Figure 11. Residuals graph for the Urban Population Percentage, with a horizontal line at zero in red.", fig.align = "center", include=F}
+
+# par(mfrow=c(1,2))
+
+
+rstandard_val <- rstandard(first_model)
+
+ggplot(tidy_joined_dataset, aes(x = UrbanPopPercentage2019, y = rstandard_val)) +
+  geom_point(shape = 1) +
+  geom_hline(yintercept = 0,  size = 0.5, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.7, colour="#3080cf", alpha = 0.3) +
+  labs(y = "rstandard", x = "Urban Population Percentage") +
+  theme_bw()
+
+
+```
+```{r rez_ATI, fig.cap = "Figure 12. Residuals graph for Unemployment rates, with a loess smoothing curve in blue and a horizontal line at zero in red.", fig.align = "center", include=F}
+
+rstandard_val <- rstandard(first_model)
+
+ggplot(tidy_joined_dataset, aes(x = Unemployment2019, y = rstandard_val)) +
+  geom_point(shape = 1) +
+  geom_hline(yintercept = 0,  size = 0.5, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.7, colour="#3080cf", alpha = 0.3) +
+  labs(y = "rstandard", x = "Unemployment rate") +
+  theme_bw()
+
+```
+
+
+```{r rez_nw, fig.cap = "Figure 13. Residuals graph for Middle schoole enrollment rates, with a loess smoothing curve in blue and a horizontal line at zero in red.", fig.align = "center", include = F}
+
+rstandard_val <- rstandard(first_model)
+
+ggplot(tidy_joined_dataset, aes(x = MidSchool2000, y = rstandard_val)) +
+  geom_point(shape = 1) +
+  geom_hline(yintercept = 0,  size = 0.5, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.7, colour="#3080cf", alpha = 0.3) +
+  labs(y = "rstandard", x = "Middle schoole enrollment rates") +
+  theme_bw()
+
+```
+```{r , fig.cap = "Figure 13. Residuals graph for High-tech Exports, with a loess smoothing curve in blue and a horizontal line at zero in red.", fig.align = "center", include=F}
+
+rstandard_val <- rstandard(first_model)
+
+ggplot(tidy_joined_dataset, aes(x = HighTech2019, y = rstandard_val)) +
+  geom_point(shape = 1) +
+  geom_hline(yintercept = 0,  size = 0.5, colour= "red") +
+  geom_smooth(method = "loess", se = TRUE, size = 0.7, colour="#3080cf", alpha = 0.3) +
+  labs(y = "rstandard", x = "High-tech Exports") +
+  theme_bw()
+
+```
+
+In table 3, we see that the GVIF value for the variables with 1 degree of freedom each, and the GVIF^(1/(2*Df)) value for the variables with more than 1 degree of freedom each are all between 1 and 5. This indicates that there is moderate correlation between the predictor variables. Since there is not a lot of multicollinearity between the predictor variables, the statistical power of the model is not greatly reduced, and we can perform the desired analysis.
+
+```{r   model_vifs}
+
+kable(car::vif(first_model),
+      caption = "Table 3: VIF table") %>%
+  kable_styling(full_width = T)
+
+```
+
+
+## ii. Model Results and Interpretation
+
+
+Our model is the following:
+
+```{r model_eq}
+
+summary(first_model)$call
+
+
+```
+Given the nature of splines, interpretation of the model coefficients is deemed pointless as all else unchanged is not a possibility to predict the average square root of GDP per capita. Alternatively, we focus on examining the coefficients and their relative significance in the ANOVA table analysis section.
+
+We notice that the coefficient p-values in table 4 tell us is that the urban population percentage and middle-school enrollment rates with their 1 and 3 levels, unemployment 1 level share the trait of their levels having a p-value < 0.05, whereas high-tech exports was found to be insignificant with p-values > 0.05.
+
+***
+
+```{r   transf_model_summary_overall}
+
+kable(summary(first_model)$coefficients, 
+      digits = 4,
+      caption = "Table 4. Model Summary Table") %>%
+  kable_styling(full_width = F)
+
+#Residual Standard error (Like Standard Deviation)
+RSE <- summary(first_model)$sigma #Residual Standard Error
+RSE_df <- summary(first_model)$df[2] #Residual Standard Error df
+MR_2 <- summary(first_model)$r.squared #Multiple R-squared
+AR_2 <- summary(first_model)$adj.r.squared # adjusted R-squared
+FS <- summary(first_model)$fstatistic[1]   # f-statistic
+fs_n <- summary(first_model)$fstatistic[2]   # f-statistic numerator df
+fs_d <- summary(first_model)$fstatistic[3]   # f-statistic denominator df
+fs_p <- pf(summary(first_model)$fstatistic[1],summary(first_model)$fstatistic[2],summary(first_model)$fstatistic[3],lower.tail=FALSE)
+
+new_summary_1 <- data.frame() %>% 
+  rbind(list("Residual Standard Error", RSE, RSE_df),
+      list("Multiple R-squared", MR_2, ""),
+      list("Adjusted R-squared", AR_2, "")) %>%
+kable(format = "html", 
+      digits = 3, 
+      table.attr = "style='width:30%;'", 
+      col.names = c("", "Value", "df"),
+      row.names = FALSE) %>%
+  kable_styling(full_width = F)
+
+
+new_summary_2 <- data.frame() %>% 
+  rbind(list("Model F-statistic", FS, fs_n, fs_d),
+      list("P-value", fs_p, "", "")) %>%
+  mutate_if(is.numeric, funs(as.character(signif(., 4)))) %>%
+kable(format = "html", 
+      digits = 3, 
+      table.attr = "style='width:80%;'",
+      col.names = c("", "Value", "Numerator df", "Denominator df"),
+      row.names = FALSE) %>%
+  kable_styling(full_width = F)
+
+new_summary_1
+new_summary_2
+
+```
+
+However, what important is the model as a whole is useful.Seeing the adjusted R-squared of 0.666 using our model, we found that it explains a lot of variability of the average GDP per capita transformed to the power of 0.5 which, coupled with the significance of the predictors and the low p-value of 6.338e-13 for our model, lead us to believe it is helpful in its explanatory ability.
+
+***
+
+
+## iii. Inference for multiple regression
+
+From the ANOVA table in table 6, the High-tech Exports with 1 degree of freedom add 10866.301 sum of squares. With an F value =5.8654 and p-value equals 0.0185, we can conclude that the High-tech Exports alone in the model explains a significant amount of variability.
+
+The Urban population Percentage variable with 4 knots and 3 degrees of freedom keeps adding 163412.005 sum of squares. With an F value =29.4020 and p-value equals 0.0000, we can conclude that the Urban population Percentage variable, given that the High-tech Exports in the model, is statistically significant.
+
+The Middle-school enrollment rates variable with 4 knots and 3 degrees of freedom keeps adding 94844.386 sum of squares. With an F value =17.0649 and p-value equals 0.0000, we can conclude that the Middle-school enrollment rates variable, given that the High-tech Exports and Urban population Percentage with 4 knots in the model, is statistically significant.
+
+The Unemployment Rates variable with 4 knots and 3 degrees of freedom keeps adding 8154.963 sum of squares. With an F value =1.4673 and p-value equals 0.2325, we can conclude that the Unemployment Rates variable, given that the High-tech Exports, Urban population Percentage with 4 knots, and Middle-school enrollment rates variable, also with 4 knots, in the model, is statistically insignificant.
+
+
+```{r   transf_anova_table}
+ kable(anova(first_model), 
+       digits = 4,
+       caption = "Table 6. ANOVA Table") %>%
+  kable_styling(full_width = T)
+```
+The 95% Prediction Intervals: For the 95% Prediction Interval, any country with 0% of urban population, unemployment rates = 5%, middle-school enrollment rates in 2000 is 60% and they export $10,000,000 worth of high-tech products, their square root of GDP per capita can be predicted at 98.09265 with the lower limit is -18.23444	 and upper limit is 214.4197
+
+With those countries holding the same value with unemployment rates = 5%, middle-school enrollment rates in 2000 is 60% and they export $10,000,000 worth of high-tech products. The Prediction Interval table below shows the predicted square root of GDP per capita for urban population percentage equals 40, 50, 60, and 70%.
+
+
+```{r transf_model_PI}
+
+
+values = c(0, 40, 50, 60, 70)
+
+PI <- data.frame(predict(first_model, 
+              newdata=data.frame(Unemployment2019 = 5,
+                                   UrbanPopPercentage2019 = values,
+                                   MidSchool2000 = 60, 
+                                 HighTech2019= 1e+07), 
+              interval="prediction", level=.95))
+PI$UrbanPopPercentage2019 <- values
+
+PI <- PI %>%
+  dplyr::select(c(UrbanPopPercentage2019, fit, lwr, upr)) 
+colnames(PI) <- c("UrbanPopPercentage2019" , "Point Estimate" , "Lower Limit" , "Upper Limit")
+
+kable(PI,
+    digits = 5,
+    caption = "Table 7. The 95% Prediction intervals for the square root of GDP per capita, where Urban population percentage = 0, 40, 50, 60, 70, respectively, for unemployment rate = 5, middle school enrollment rate = 60, high-tech exports = 10,000,000 USD") %>%
+  kable_styling(full_width = T)
+
+
+
+```
+
+
+
+# IV. Discussion 
+
+## i. Conclusions
+
+We recognize that interpretability is sometimes to be traded for the sake of a better model. Our analysis shows that the model we proposed seems to be helpful as it explains quite a good amount of variability in GDP per capita in 2019 (66.6%).
+
+## ii. Limitations
+
+This project is limited by the data available. The decision to use the combination chosen indicators reduced the usable countries down to only 36.4%, due to excluding countries with a missing value in any of the variables used. Additionally, there were some notable outliers and points with high leverage that could not be removed because they were not mistakes and thus are legit.
+
+The choice to use a non-linear model made the interpretation of the relationship between the variables more complex and less straightforward, which is a trade off that the author is well aware of. 
+
+The study didn't have any test of any kind for over fitting, so we don't know how this proposed model will perform outside of this given data set.
+
+
+```
+
+
+## iii. Further questions
+
+
+
+***
+
+
+# V. Citations and References {-}
